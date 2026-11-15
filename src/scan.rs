@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 
 use rayon::prelude::*;
 use walkdir::WalkDir;
@@ -52,6 +53,25 @@ pub struct ScanReport {
     /// Files and directory entries that could not be read. These never abort
     /// a scan.
     pub failed: Vec<Error>,
+    /// Wall-clock time spent in each phase of the scan.
+    pub timings: ScanTimings,
+}
+
+/// Wall-clock time spent in each phase of a scan.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ScanTimings {
+    /// Walking the directory to find image files.
+    pub discover: Duration,
+    /// Decoding and hashing the images, in parallel.
+    pub hash: Duration,
+    /// Comparing all pairs of hashes and grouping the matches.
+    pub compare: Duration,
+}
+
+impl ScanTimings {
+    pub fn total(&self) -> Duration {
+        self.discover + self.hash + self.compare
+    }
 }
 
 /// Hashes every image in `dir` and groups those within
@@ -74,6 +94,7 @@ pub fn scan_with_progress(
         return Err(Error::NotADirectory(dir.to_path_buf()));
     }
 
+    let started = Instant::now();
     let mut failed = Vec::new();
     let mut paths = Vec::new();
     let max_depth = if options.recursive { usize::MAX } else { 1 };
@@ -87,7 +108,9 @@ pub fn scan_with_progress(
         }
     }
     paths.sort();
+    let discover = started.elapsed();
 
+    let started = Instant::now();
     let total = paths.len();
     let done = AtomicUsize::new(0);
     on_progress(0, total);
@@ -108,10 +131,22 @@ pub fn scan_with_progress(
         }
     }
 
+    let hash = started.elapsed();
+
+    let started = Instant::now();
+    let hashed = files.len();
+    let groups = group_similar(files, options.max_distance);
+    let compare = started.elapsed();
+
     Ok(ScanReport {
-        hashed: files.len(),
-        groups: group_similar(files, options.max_distance),
+        hashed,
+        groups,
         failed,
+        timings: ScanTimings {
+            discover,
+            hash,
+            compare,
+        },
     })
 }
 

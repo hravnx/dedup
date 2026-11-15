@@ -30,7 +30,9 @@ dedup compare <A> <B> [-a ahash|dhash|phash]
 hashes differ in at most `-t` bits out of 64 (default 8). Lower is stricter; 0 matches identical
 hashes only. Each line shows the hash, the distance to the first file of the group, and the path.
 Unreadable files are reported on stderr and skipped. A progress bar is drawn on stderr while
-hashing; it is hidden when stderr is not a terminal or with `--no-progress`. Nothing is ever deleted or moved.
+hashing; it is hidden when stderr is not a terminal or with `--no-progress`. The report ends with
+a summary and timings for each phase (also under `stats` in the JSON output). Nothing is ever
+deleted or moved.
 
 `compare` prints the hashes, bit distance and similarity percentage of two files.
 

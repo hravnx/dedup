@@ -161,6 +161,49 @@ fn print_text(report: &ScanReport) {
         report.groups.len(),
         duplicates
     );
+
+    let stats = Stats::new(report);
+    println!(
+        "Took {:.2}s: discovery {:.2}s, hashing {:.2}s ({:.0} images/s on {} threads), comparing {:.2}s ({} pairs)",
+        report.timings.total().as_secs_f64(),
+        report.timings.discover.as_secs_f64(),
+        report.timings.hash.as_secs_f64(),
+        stats.images_per_sec,
+        stats.threads,
+        report.timings.compare.as_secs_f64(),
+        stats.pairs
+    );
+}
+
+/// Figures derived from a report's timings.
+struct Stats {
+    /// Image files processed per second of hashing, including ones that failed to decode.
+    images_per_sec: f64,
+    /// Worker threads used for hashing.
+    threads: usize,
+    /// Hash pairs compared.
+    pairs: u64,
+}
+
+impl Stats {
+    fn new(report: &ScanReport) -> Self {
+        let processed = report.hashed + report.failed.iter().filter(|e| is_image_error(e)).count();
+        let secs = report.timings.hash.as_secs_f64();
+        let n = report.hashed as u64;
+        Stats {
+            images_per_sec: if secs > 0.0 {
+                processed as f64 / secs
+            } else {
+                0.0
+            },
+            threads: rayon::current_num_threads(),
+            pairs: n * n.saturating_sub(1) / 2,
+        }
+    }
+}
+
+fn is_image_error(e: &dedup::Error) -> bool {
+    matches!(e, dedup::Error::Image { .. })
 }
 
 fn print_json(report: &ScanReport) {
@@ -186,6 +229,20 @@ fn print_json(report: &ScanReport) {
         .iter()
         .map(|e| json!({ "path": e.path(), "error": e.to_string() }))
         .collect();
-    let out = json!({ "hashed": report.hashed, "groups": groups, "failed": failed });
+    let stats = Stats::new(report);
+    let out = json!({
+        "hashed": report.hashed,
+        "groups": groups,
+        "failed": failed,
+        "stats": {
+            "total_secs": report.timings.total().as_secs_f64(),
+            "discover_secs": report.timings.discover.as_secs_f64(),
+            "hash_secs": report.timings.hash.as_secs_f64(),
+            "compare_secs": report.timings.compare.as_secs_f64(),
+            "images_per_sec": stats.images_per_sec,
+            "threads": stats.threads,
+            "pairs_compared": stats.pairs,
+        },
+    });
     println!("{out:#}");
 }

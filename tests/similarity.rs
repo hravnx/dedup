@@ -109,6 +109,8 @@ fn scan_groups_duplicates_and_reports_failures() {
     );
     assert_eq!(flat.failed.len(), 1);
     assert!(flat.failed[0].path().unwrap().ends_with("corrupt.png"));
+    assert!(!flat.timings.hash.is_zero());
+    assert!(flat.timings.total() >= flat.timings.hash);
 
     let options = ScanOptions {
         recursive: true,
