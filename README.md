@@ -2,6 +2,23 @@
 
 Find near-duplicate images with perceptual hashing. A Rust library with a CLI on top.
 
+## Install
+
+With a [Rust toolchain](https://rustup.rs) installed, build and install the `dedup` binary into
+`~/.cargo/bin` straight from the repository:
+
+```
+cargo install --git https://github.com/hravnx/dedup
+```
+
+Or from a local checkout:
+
+```
+cargo install --path .
+```
+
+Re-run the same command to upgrade, and `cargo uninstall dedup` to remove it.
+
 ## CLI
 
 ```
