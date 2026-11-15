@@ -1,0 +1,32 @@
+[package]
+name = "dedup"
+version = "0.1.0"
+edition = "2024"
+description = "Find near-duplicate images with perceptual hashing"
+
+[features]
+default = ["cli"]
+cli = ["dep:clap", "dep:serde_json"]
+
+[[bin]]
+name = "dedup"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[dependencies]
+clap = { version = "4.6.7", features = ["derive"], optional = true }
+image = { version = "0.25.10", default-features = false, features = [
+    "bmp",
+    "gif",
+    "jpeg",
+    "png",
+    "tiff",
+    "webp",
+] }
+rayon = "1.12.0"
+serde_json = { version = "1.0.154", optional = true }
+thiserror = "2.0.21"
+walkdir = "2.5.0"
+
+[dev-dependencies]
+tempfile = "3.27.0"
