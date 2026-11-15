@@ -5,14 +5,15 @@ Find near-duplicate images with perceptual hashing. A Rust library with a CLI on
 ## CLI
 
 ```
-dedup scan <DIR> [-a ahash|dhash|phash] [-t <max-distance>] [-r] [--json]
+dedup scan <DIR> [-a ahash|dhash|phash] [-t <max-distance>] [-r] [--json] [--no-progress]
 dedup compare <A> <B> [-a ahash|dhash|phash]
 ```
 
 `scan` hashes every image in a directory (`-r` to recurse) and prints groups of files whose
 hashes differ in at most `-t` bits out of 64 (default 8). Lower is stricter; 0 matches identical
 hashes only. Each line shows the hash, the distance to the first file of the group, and the path.
-Unreadable files are reported on stderr and skipped. Nothing is ever deleted or moved.
+Unreadable files are reported on stderr and skipped. A progress bar is drawn on stderr while
+hashing; it is hidden when stderr is not a terminal or with `--no-progress`. Nothing is ever deleted or moved.
 
 `compare` prints the hashes, bit distance and similarity percentage of two files.
 

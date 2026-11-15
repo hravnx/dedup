@@ -1,8 +1,10 @@
+use std::fmt;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use dedup::{Algorithm, DEFAULT_MAX_DISTANCE, HASH_BITS, ImageHash, ScanOptions, ScanReport};
+use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 use serde_json::json;
 
 /// Find near-duplicate images with perceptual hashing.
@@ -30,6 +32,9 @@ enum Command {
         /// Print the report as JSON.
         #[arg(long)]
         json: bool,
+        /// Do not show a progress bar while hashing.
+        #[arg(long)]
+        no_progress: bool,
     },
     /// Compare two image files.
     Compare {
@@ -78,13 +83,38 @@ fn run(cli: Cli) -> dedup::Result<()> {
             max_distance,
             recursive,
             json,
+            no_progress,
         } => {
             let options = ScanOptions {
                 algorithm: algorithm.into(),
                 max_distance,
                 recursive,
             };
-            let report = dedup::scan(&dir, &options)?;
+            // Drawn on stderr, and hidden automatically when stderr is not a terminal.
+            let bar = if no_progress {
+                ProgressBar::hidden()
+            } else {
+                ProgressBar::no_length().with_style(
+                    ProgressStyle::with_template(
+                        "Hashing {bar:30} {pos}/{len} images ({rate}, eta {eta})",
+                    )
+                    .expect("valid progress template")
+                    // A custom key, because in a template `{per_sec:.0}` is a
+                    // colour (0 = black), not a precision.
+                    .with_key(
+                        "rate",
+                        |state: &ProgressState, w: &mut dyn fmt::Write| {
+                            let _ = write!(w, "{:.0}/s", state.per_sec());
+                        },
+                    ),
+                )
+            };
+            let report = dedup::scan_with_progress(&dir, &options, |done, total| {
+                bar.set_length(total as u64);
+                bar.set_position(bar.position().max(done as u64));
+            });
+            bar.finish_and_clear();
+            let report = report?;
             if json {
                 print_json(&report);
             } else {

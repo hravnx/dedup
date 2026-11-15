@@ -121,6 +121,24 @@ fn scan_groups_duplicates_and_reports_failures() {
 }
 
 #[test]
+fn scan_reports_progress_for_every_file() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fixtures(dir.path());
+
+    let calls = std::sync::Mutex::new(Vec::new());
+    dedup::scan_with_progress(dir.path(), &ScanOptions::default(), |done, total| {
+        calls.lock().unwrap().push((done, total));
+    })
+    .unwrap();
+
+    // Five images plus the corrupt file; notes.txt is not counted.
+    let mut calls = calls.into_inner().unwrap();
+    assert_eq!(calls[0], (0, 6));
+    calls.sort();
+    assert_eq!(calls, (0..=6).map(|done| (done, 6)).collect::<Vec<_>>());
+}
+
+#[test]
 fn scan_rejects_missing_directory() {
     let err = dedup::scan(Path::new("/no/such/dir"), &ScanOptions::default());
     assert!(matches!(err, Err(dedup::Error::NotADirectory(_))));

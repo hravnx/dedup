@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use rayon::prelude::*;
 use walkdir::WalkDir;
@@ -56,6 +57,19 @@ pub struct ScanReport {
 /// Hashes every image in `dir` and groups those within
 /// `options.max_distance` of each other.
 pub fn scan(dir: &Path, options: &ScanOptions) -> Result<ScanReport> {
+    scan_with_progress(dir, options, |_, _| {})
+}
+
+/// Like [`scan`], reporting hashing progress through `on_progress(done, total)`.
+///
+/// The callback is first called with `(0, total)` once the files to hash are
+/// known, then once per processed file (hashed or failed). It is called from
+/// worker threads, so calls may arrive out of order.
+pub fn scan_with_progress(
+    dir: &Path,
+    options: &ScanOptions,
+    on_progress: impl Fn(usize, usize) + Sync,
+) -> Result<ScanReport> {
     if !dir.is_dir() {
         return Err(Error::NotADirectory(dir.to_path_buf()));
     }
@@ -74,11 +88,15 @@ pub fn scan(dir: &Path, options: &ScanOptions) -> Result<ScanReport> {
     }
     paths.sort();
 
+    let total = paths.len();
+    let done = AtomicUsize::new(0);
+    on_progress(0, total);
     let results: Vec<Result<HashedFile>> = paths
         .into_par_iter()
         .map(|path| {
-            let hash = ImageHash::from_path(&path, options.algorithm)?;
-            Ok(HashedFile { path, hash })
+            let hash = ImageHash::from_path(&path, options.algorithm);
+            on_progress(done.fetch_add(1, Ordering::Relaxed) + 1, total);
+            Ok(HashedFile { path, hash: hash? })
         })
         .collect();
 

@@ -20,4 +20,7 @@ mod scan;
 
 pub use error::{Error, Result};
 pub use hash::{Algorithm, HASH_BITS, ImageHash, similarity};
-pub use scan::{DEFAULT_MAX_DISTANCE, HashedFile, IMAGE_EXTENSIONS, ScanOptions, ScanReport, scan};
+pub use scan::{
+    DEFAULT_MAX_DISTANCE, HashedFile, IMAGE_EXTENSIONS, ScanOptions, ScanReport, scan,
+    scan_with_progress,
+};
