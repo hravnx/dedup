@@ -31,3 +31,10 @@ walkdir = "2.5.0"
 
 [dev-dependencies]
 tempfile = "3.27.0"
+
+# Smaller release binary at no runtime cost; builds take longer.
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+panic = "abort"
