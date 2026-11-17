@@ -1,15 +1,15 @@
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
+use image::ImageFormat;
+use rayon::iter::Either;
 use rayon::prelude::*;
 use walkdir::WalkDir;
 
 use crate::error::{Error, Result};
 use crate::hash::{Algorithm, ImageHash};
-
-/// File extensions (lowercase) treated as images by [`scan`].
-pub const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "gif", "bmp", "tif", "tiff", "webp"];
 
 /// Default maximum Hamming distance for two images to count as duplicates.
 pub const DEFAULT_MAX_DISTANCE: u32 = 8;
@@ -40,21 +40,65 @@ pub struct HashedFile {
     pub hash: ImageHash,
 }
 
+/// Two or more similar images, sorted by path. Dereferences to a slice of
+/// its files.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Group(Vec<HashedFile>);
+
+impl Group {
+    /// Each file with the Hamming distance of its hash from the first file's.
+    pub fn with_distances(&self) -> impl Iterator<Item = (&HashedFile, u32)> {
+        let first = self.0[0].hash;
+        self.0.iter().map(move |f| (f, first.distance(&f.hash)))
+    }
+}
+
+impl Deref for Group {
+    type Target = [HashedFile];
+
+    fn deref(&self) -> &[HashedFile] {
+        &self.0
+    }
+}
+
 #[derive(Debug)]
 pub struct ScanReport {
+    /// Number of image files found, whether or not they could be hashed.
+    pub discovered: usize,
     /// Number of images successfully hashed.
     pub hashed: usize,
-    /// Groups of two or more similar images. Files within a group and the
-    /// groups themselves are sorted by path.
+    /// Groups of similar images, sorted by path.
     ///
     /// Groups are transitive: if A matches B and B matches C, all three share
     /// a group even when A and C are further apart than the threshold.
-    pub groups: Vec<Vec<HashedFile>>,
+    pub groups: Vec<Group>,
     /// Files and directory entries that could not be read. These never abort
     /// a scan.
     pub failed: Vec<Error>,
+    /// Number of hash pairs compared while grouping.
+    pub pairs_compared: u64,
+    /// Worker threads used for hashing.
+    pub threads: usize,
     /// Wall-clock time spent in each phase of the scan.
     pub timings: ScanTimings,
+}
+
+impl ScanReport {
+    /// Number of files that duplicate another: every group member but one.
+    pub fn redundant(&self) -> usize {
+        self.groups.iter().map(|g| g.len() - 1).sum()
+    }
+
+    /// Image files processed per second of hashing, including ones that
+    /// failed to decode.
+    pub fn images_per_sec(&self) -> f64 {
+        let secs = self.timings.hash.as_secs_f64();
+        if secs > 0.0 {
+            self.discovered as f64 / secs
+        } else {
+            0.0
+        }
+    }
 }
 
 /// Wall-clock time spent in each phase of a scan.
@@ -94,10 +138,40 @@ pub fn scan_with_progress(
         return Err(Error::NotADirectory(dir.to_path_buf()));
     }
 
+    let ((paths, mut failed), discover) = timed(|| discover(dir, options.recursive));
+    let discovered = paths.len();
+    let ((files, undecodable), hash) = timed(|| hash_all(paths, options.algorithm, &on_progress));
+    failed.extend(undecodable);
+    let hashed = files.len();
+    let ((groups, pairs_compared), compare) = timed(|| group_similar(files, options.max_distance));
+
+    Ok(ScanReport {
+        discovered,
+        hashed,
+        groups,
+        failed,
+        pairs_compared,
+        threads: rayon::current_num_threads(),
+        timings: ScanTimings {
+            discover,
+            hash,
+            compare,
+        },
+    })
+}
+
+fn timed<T>(f: impl FnOnce() -> T) -> (T, Duration) {
     let started = Instant::now();
-    let mut failed = Vec::new();
+    let out = f();
+    (out, started.elapsed())
+}
+
+/// Image files under `dir`, sorted by path, and the entries that could not
+/// be visited.
+fn discover(dir: &Path, recursive: bool) -> (Vec<PathBuf>, Vec<Error>) {
     let mut paths = Vec::new();
-    let max_depth = if options.recursive { usize::MAX } else { 1 };
+    let mut failed = Vec::new();
+    let max_depth = if recursive { usize::MAX } else { 1 };
     for entry in WalkDir::new(dir).max_depth(max_depth) {
         match entry {
             Ok(entry) if entry.file_type().is_file() && is_image(entry.path()) => {
@@ -108,57 +182,37 @@ pub fn scan_with_progress(
         }
     }
     paths.sort();
-    let discover = started.elapsed();
+    (paths, failed)
+}
 
-    let started = Instant::now();
+/// Hashes `paths` in parallel, keeping both outputs in input order.
+fn hash_all(
+    paths: Vec<PathBuf>,
+    algorithm: Algorithm,
+    on_progress: &(impl Fn(usize, usize) + Sync),
+) -> (Vec<HashedFile>, Vec<Error>) {
     let total = paths.len();
     let done = AtomicUsize::new(0);
     on_progress(0, total);
-    let results: Vec<Result<HashedFile>> = paths
-        .into_par_iter()
-        .map(|path| {
-            let hash = ImageHash::from_path(&path, options.algorithm);
-            on_progress(done.fetch_add(1, Ordering::Relaxed) + 1, total);
-            Ok(HashedFile { path, hash: hash? })
-        })
-        .collect();
-
-    let mut files = Vec::new();
-    for result in results {
-        match result {
-            Ok(file) => files.push(file),
-            Err(e) => failed.push(e),
+    paths.into_par_iter().partition_map(|path| {
+        let hash = ImageHash::from_path(&path, algorithm);
+        on_progress(done.fetch_add(1, Ordering::Relaxed) + 1, total);
+        match hash {
+            Ok(hash) => Either::Left(HashedFile { path, hash }),
+            Err(e) => Either::Right(e),
         }
-    }
-
-    let hash = started.elapsed();
-
-    let started = Instant::now();
-    let hashed = files.len();
-    let groups = group_similar(files, options.max_distance);
-    let compare = started.elapsed();
-
-    Ok(ScanReport {
-        hashed,
-        groups,
-        failed,
-        timings: ScanTimings {
-            discover,
-            hash,
-            compare,
-        },
     })
 }
 
+/// Whether the extension of `path` names a format this build can decode.
 fn is_image(path: &Path) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| IMAGE_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
+    ImageFormat::from_path(path).is_ok_and(|format| format.reading_enabled())
 }
 
 /// Groups `files` (sorted by path) into connected components of the
-/// "within `max_distance`" relation, dropping singletons.
-fn group_similar(files: Vec<HashedFile>, max_distance: u32) -> Vec<Vec<HashedFile>> {
+/// "within `max_distance`" relation, dropping singletons. Also returns the
+/// number of pairs compared.
+fn group_similar(files: Vec<HashedFile>, max_distance: u32) -> (Vec<Group>, u64) {
     let mut parent: Vec<usize> = (0..files.len()).collect();
 
     fn find(parent: &mut [usize], mut i: usize) -> usize {
@@ -184,8 +238,13 @@ fn group_similar(files: Vec<HashedFile>, max_distance: u32) -> Vec<Vec<HashedFil
         let root = find(&mut parent, i);
         groups[root].push(file);
     }
-    groups.retain(|g| g.len() > 1);
-    groups
+    let groups = groups
+        .into_iter()
+        .filter(|g| g.len() > 1)
+        .map(Group)
+        .collect();
+    let n = parent.len() as u64;
+    (groups, n * n.saturating_sub(1) / 2)
 }
 
 #[cfg(test)]
@@ -208,7 +267,8 @@ mod tests {
             file("d", 0b0011),
             file("e", u64::MAX),
         ];
-        let groups = group_similar(files, 1);
+        let (groups, pairs) = group_similar(files, 1);
+        assert_eq!(pairs, 10);
         let names: Vec<Vec<&str>> = groups
             .iter()
             .map(|g| g.iter().map(|f| f.path.to_str().unwrap()).collect())
@@ -222,5 +282,7 @@ mod tests {
         assert!(is_image(Path::new("photo.webp")));
         assert!(!is_image(Path::new("notes.txt")));
         assert!(!is_image(Path::new("png")));
+        // Known to the image crate, but its decoder is not compiled in.
+        assert!(!is_image(Path::new("icon.ico")));
     }
 }

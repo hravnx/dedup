@@ -97,7 +97,12 @@ fn scan_groups_duplicates_and_reports_failures() {
     base_image().save(nested.join("copy.png")).unwrap();
 
     let flat = dedup::scan(dir.path(), &ScanOptions::default()).unwrap();
+    assert_eq!(flat.discovered, 6);
     assert_eq!(flat.hashed, 5);
+    assert_eq!(flat.redundant(), 3);
+    assert_eq!(flat.pairs_compared, 10);
+    let distances: Vec<_> = flat.groups[0].with_distances().collect();
+    assert_eq!(distances[0], (&flat.groups[0][0], 0));
     assert_eq!(flat.groups.len(), 1);
     let names: Vec<_> = flat.groups[0]
         .iter()

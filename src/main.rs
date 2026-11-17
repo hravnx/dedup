@@ -142,68 +142,28 @@ fn print_text(report: &ScanReport) {
     }
     for (i, group) in report.groups.iter().enumerate() {
         println!("Group {} ({} files)", i + 1, group.len());
-        let first = &group[0];
-        for file in group {
-            println!(
-                "  {}  {:>2}  {}",
-                file.hash,
-                first.hash.distance(&file.hash),
-                file.path.display()
-            );
+        for (file, distance) in group.with_distances() {
+            println!("  {}  {:>2}  {}", file.hash, distance, file.path.display());
         }
         println!();
     }
-    let duplicates: usize = report.groups.iter().map(|g| g.len() - 1).sum();
     println!(
         "{} images hashed, {} skipped, {} groups, {} redundant files",
         report.hashed,
         report.failed.len(),
         report.groups.len(),
-        duplicates
+        report.redundant()
     );
-
-    let stats = Stats::new(report);
     println!(
         "Took {:.2}s: discovery {:.2}s, hashing {:.2}s ({:.0} images/s on {} threads), comparing {:.2}s ({} pairs)",
         report.timings.total().as_secs_f64(),
         report.timings.discover.as_secs_f64(),
         report.timings.hash.as_secs_f64(),
-        stats.images_per_sec,
-        stats.threads,
+        report.images_per_sec(),
+        report.threads,
         report.timings.compare.as_secs_f64(),
-        stats.pairs
+        report.pairs_compared
     );
-}
-
-/// Figures derived from a report's timings.
-struct Stats {
-    /// Image files processed per second of hashing, including ones that failed to decode.
-    images_per_sec: f64,
-    /// Worker threads used for hashing.
-    threads: usize,
-    /// Hash pairs compared.
-    pairs: u64,
-}
-
-impl Stats {
-    fn new(report: &ScanReport) -> Self {
-        let processed = report.hashed + report.failed.iter().filter(|e| is_image_error(e)).count();
-        let secs = report.timings.hash.as_secs_f64();
-        let n = report.hashed as u64;
-        Stats {
-            images_per_sec: if secs > 0.0 {
-                processed as f64 / secs
-            } else {
-                0.0
-            },
-            threads: rayon::current_num_threads(),
-            pairs: n * n.saturating_sub(1) / 2,
-        }
-    }
-}
-
-fn is_image_error(e: &dedup::Error) -> bool {
-    matches!(e, dedup::Error::Image { .. })
 }
 
 fn print_json(report: &ScanReport) {
@@ -211,14 +171,13 @@ fn print_json(report: &ScanReport) {
         .groups
         .iter()
         .map(|group| {
-            let first = &group[0];
             group
-                .iter()
-                .map(|file| {
+                .with_distances()
+                .map(|(file, distance)| {
                     json!({
                         "path": file.path,
                         "hash": file.hash.to_string(),
-                        "distance": first.hash.distance(&file.hash),
+                        "distance": distance,
                     })
                 })
                 .collect::<Vec<_>>()
@@ -229,9 +188,9 @@ fn print_json(report: &ScanReport) {
         .iter()
         .map(|e| json!({ "path": e.path(), "error": e.to_string() }))
         .collect();
-    let stats = Stats::new(report);
     let out = json!({
         "hashed": report.hashed,
+        "redundant": report.redundant(),
         "groups": groups,
         "failed": failed,
         "stats": {
@@ -239,9 +198,9 @@ fn print_json(report: &ScanReport) {
             "discover_secs": report.timings.discover.as_secs_f64(),
             "hash_secs": report.timings.hash.as_secs_f64(),
             "compare_secs": report.timings.compare.as_secs_f64(),
-            "images_per_sec": stats.images_per_sec,
-            "threads": stats.threads,
-            "pairs_compared": stats.pairs,
+            "images_per_sec": report.images_per_sec(),
+            "threads": report.threads,
+            "pairs_compared": report.pairs_compared,
         },
     });
     println!("{out:#}");
