@@ -2,7 +2,7 @@ use std::fmt;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use dedup::{Algorithm, DEFAULT_MAX_DISTANCE, HASH_BITS, ImageHash, ScanOptions, ScanReport};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 use serde_json::json;
@@ -18,31 +18,37 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Report groups of similar images in a directory.
-    Scan {
-        dir: PathBuf,
-        #[arg(short, long, value_enum, default_value_t = Algo::Phash)]
-        algorithm: Algo,
-        /// Maximum number of differing hash bits (0-64) for images to count as duplicates.
-        #[arg(short = 't', long, default_value_t = DEFAULT_MAX_DISTANCE,
-              value_parser = clap::value_parser!(u32).range(0..=HASH_BITS as i64))]
-        max_distance: u32,
-        /// Descend into subdirectories.
-        #[arg(short, long)]
-        recursive: bool,
-        /// Print the report as JSON.
-        #[arg(long)]
-        json: bool,
-        /// Do not show a progress bar while hashing.
-        #[arg(long)]
-        no_progress: bool,
-    },
+    Scan(ScanArgs),
     /// Compare two image files.
-    Compare {
-        a: PathBuf,
-        b: PathBuf,
-        #[arg(short, long, value_enum, default_value_t = Algo::Phash)]
-        algorithm: Algo,
-    },
+    Compare(CompareArgs),
+}
+
+#[derive(Args)]
+struct ScanArgs {
+    dir: PathBuf,
+    #[arg(short, long, value_enum, default_value_t = Algo::Phash)]
+    algorithm: Algo,
+    /// Maximum number of differing hash bits (0-64) for images to count as duplicates.
+    #[arg(short = 't', long, default_value_t = DEFAULT_MAX_DISTANCE,
+          value_parser = clap::value_parser!(u32).range(0..=HASH_BITS as i64))]
+    max_distance: u32,
+    /// Descend into subdirectories.
+    #[arg(short, long)]
+    recursive: bool,
+    /// Print the report as JSON.
+    #[arg(long)]
+    json: bool,
+    /// Do not show a progress bar while hashing.
+    #[arg(long)]
+    no_progress: bool,
+}
+
+#[derive(Args)]
+struct CompareArgs {
+    a: PathBuf,
+    b: PathBuf,
+    #[arg(short, long, value_enum, default_value_t = Algo::Phash)]
+    algorithm: Algo,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -77,63 +83,61 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> dedup::Result<()> {
     match cli.command {
-        Command::Scan {
-            dir,
-            algorithm,
-            max_distance,
-            recursive,
-            json,
-            no_progress,
-        } => {
-            let options = ScanOptions {
-                algorithm: algorithm.into(),
-                max_distance,
-                recursive,
-            };
-            // Drawn on stderr, and hidden automatically when stderr is not a terminal.
-            let bar = if no_progress {
-                ProgressBar::hidden()
-            } else {
-                ProgressBar::no_length().with_style(
-                    ProgressStyle::with_template(
-                        "Hashing {bar:30} {pos}/{len} images ({rate}, eta {eta})",
-                    )
-                    .expect("valid progress template")
-                    // A custom key, because in a template `{per_sec:.0}` is a
-                    // colour (0 = black), not a precision.
-                    .with_key(
-                        "rate",
-                        |state: &ProgressState, w: &mut dyn fmt::Write| {
-                            let _ = write!(w, "{:.0}/s", state.per_sec());
-                        },
-                    ),
-                )
-            };
-            let report = dedup::scan_with_progress(&dir, &options, |done, total| {
-                bar.set_length(total as u64);
-                bar.set_position(bar.position().max(done as u64));
-            });
-            bar.finish_and_clear();
-            let report = report?;
-            if json {
-                print_json(&report);
-            } else {
-                print_text(&report);
-            }
-        }
-        Command::Compare { a, b, algorithm } => {
-            let ha = ImageHash::from_path(&a, algorithm.into())?;
-            let hb = ImageHash::from_path(&b, algorithm.into())?;
-            println!("{ha}  {}", a.display());
-            println!("{hb}  {}", b.display());
-            println!(
-                "distance {} of {HASH_BITS} bits, {:.1}% similar",
-                ha.distance(&hb),
-                ha.similarity(&hb) * 100.0
-            );
-        }
+        Command::Scan(args) => run_scan(args),
+        Command::Compare(args) => run_compare(args),
+    }
+}
+
+fn run_scan(args: ScanArgs) -> dedup::Result<()> {
+    let options = ScanOptions {
+        algorithm: args.algorithm.into(),
+        max_distance: args.max_distance,
+        recursive: args.recursive,
+    };
+    let bar = progress_bar(args.no_progress);
+    let report = dedup::scan_with_progress(&args.dir, &options, |done, total| {
+        bar.set_length(total as u64);
+        bar.set_position(bar.position().max(done as u64));
+    });
+    bar.finish_and_clear();
+    let report = report?;
+    if args.json {
+        print_json(&report);
+    } else {
+        print_text(&report);
     }
     Ok(())
+}
+
+fn run_compare(args: CompareArgs) -> dedup::Result<()> {
+    let algorithm = args.algorithm.into();
+    let ha = ImageHash::from_path(&args.a, algorithm)?;
+    let hb = ImageHash::from_path(&args.b, algorithm)?;
+    println!("{ha}  {}", args.a.display());
+    println!("{hb}  {}", args.b.display());
+    println!(
+        "distance {} of {HASH_BITS} bits, {:.1}% similar",
+        ha.distance(&hb),
+        ha.similarity(&hb) * 100.0
+    );
+    Ok(())
+}
+
+/// The hashing progress bar. Drawn on stderr, and hidden automatically when
+/// stderr is not a terminal.
+fn progress_bar(hidden: bool) -> ProgressBar {
+    if hidden {
+        return ProgressBar::hidden();
+    }
+    ProgressBar::no_length().with_style(
+        ProgressStyle::with_template("Hashing {bar:30} {pos}/{len} images ({rate}, eta {eta})")
+            .expect("valid progress template")
+            // A custom key, because in a template `{per_sec:.0}` is a
+            // colour (0 = black), not a precision.
+            .with_key("rate", |state: &ProgressState, w: &mut dyn fmt::Write| {
+                let _ = write!(w, "{:.0}/s", state.per_sec());
+            }),
+    )
 }
 
 fn print_text(report: &ScanReport) {
