@@ -7,12 +7,6 @@ use image::codecs::jpeg::JpegEncoder;
 use image::imageops::FilterType;
 use image::{DynamicImage, Rgb, RgbImage};
 
-const ALL: [Algorithm; 3] = [
-    Algorithm::Average,
-    Algorithm::Difference,
-    Algorithm::Perceptual,
-];
-
 /// A bright blob on a diagonal gradient.
 fn base_image() -> DynamicImage {
     DynamicImage::ImageRgb8(RgbImage::from_fn(320, 240, |x, y| {
@@ -59,7 +53,7 @@ fn altered_copies_are_similar_and_unrelated_images_are_not() {
     let dir = tempfile::tempdir().unwrap();
     write_fixtures(dir.path());
 
-    for algo in ALL {
+    for algo in Algorithm::ALL {
         let base = ImageHash::from_path(&dir.path().join("base.png"), algo).unwrap();
         for name in ["small.png", "bright.png", "compressed.jpg"] {
             let variant = ImageHash::from_path(&dir.path().join(name), algo).unwrap();

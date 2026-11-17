@@ -25,6 +25,15 @@ pub enum Algorithm {
     Perceptual,
 }
 
+impl Algorithm {
+    /// Every algorithm, fastest first.
+    pub const ALL: [Algorithm; 3] = [
+        Algorithm::Average,
+        Algorithm::Difference,
+        Algorithm::Perceptual,
+    ];
+}
+
 /// A 64-bit perceptual hash. Hashes are only comparable when produced by the
 /// same [`Algorithm`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -155,12 +164,6 @@ mod tests {
     use super::*;
     use image::{Rgb, RgbImage};
 
-    const ALL: [Algorithm; 3] = [
-        Algorithm::Average,
-        Algorithm::Difference,
-        Algorithm::Perceptual,
-    ];
-
     #[test]
     fn dct_of_constant_has_only_dc() {
         let out = dct_low(&[2.0; 32]);
@@ -203,7 +206,7 @@ mod tests {
         let img = DynamicImage::ImageRgb8(RgbImage::from_fn(64, 48, |x, y| {
             Rgb([(x * 4) as u8, (y * 5) as u8, ((x + y) * 2) as u8])
         }));
-        for algo in ALL {
+        for algo in Algorithm::ALL {
             let a = ImageHash::from_image(&img, algo);
             let b = ImageHash::from_image(&img.clone(), algo);
             assert_eq!(a.distance(&b), 0, "{algo:?}");
